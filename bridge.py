@@ -154,6 +154,40 @@ def text_segment(text: str) -> dict[str, Any]:
     return {"type": "text", "data": {"text": text}}
 
 
+def media_name(message: Any, fallback: str = "telegram-media") -> str:
+    file = getattr(message, "file", None)
+    name = getattr(file, "name", None) if file else None
+    if name:
+        return str(name)
+    ext = getattr(file, "ext", None) if file else None
+    return f"{fallback}{ext or ''}"
+
+
+async def downloaded_segment(
+    message: Any,
+    segment_type: str,
+    fallback_name: str,
+    thumb: int | None = None,
+) -> dict[str, Any] | None:
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    kwargs: dict[str, Any] = {"file": DOWNLOAD_DIR}
+    if thumb is not None:
+        kwargs["thumb"] = thumb
+    try:
+        path = await message.download_media(**kwargs)
+    except Exception:
+        return None
+    if not path:
+        return None
+    path_obj = Path(path)
+    encoded = base64.b64encode(path_obj.read_bytes()).decode("ascii")
+    path_obj.unlink(missing_ok=True)
+    data: dict[str, Any] = {"file": f"base64://{encoded}"}
+    if segment_type == "file":
+        data["name"] = media_name(message, fallback_name)
+    return {"type": segment_type, "data": data}
+
+
 async def telegram_sender_name(event: events.NewMessage.Event) -> str:
     sender = await event.get_sender()
     if sender is None:
@@ -170,15 +204,45 @@ async def build_segments(event: events.NewMessage.Event) -> list[dict[str, Any]]
     if event.raw_text:
         segments.append(text_segment(prefix + event.raw_text))
 
-    if event.message.photo:
-        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        path = await event.message.download_media(file=DOWNLOAD_DIR)
-        if path:
-            encoded = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+    if event.message.sticker:
+        file = event.message.file
+        mime_type = (getattr(file, "mime_type", "") or "").lower()
+        is_static = mime_type.startswith("image/") and mime_type not in {
+            "image/gif",
+            "image/webm",
+        }
+        if is_static:
+            sticker = await downloaded_segment(event.message, "image", "telegram-sticker")
+            if sticker:
+                if not event.raw_text:
+                    segments.append(text_segment(prefix.rstrip()))
+                segments.append(sticker)
+                return segments
+
+        # Animated TGS and video stickers may not be renderable by QQ as an
+        # image. Prefer a Telegram thumbnail, then fall back to the original
+        # sticker file so the content is still delivered.
+        thumbnail = await downloaded_segment(event.message, "image", "telegram-sticker", thumb=0)
+        if thumbnail:
             if not event.raw_text:
                 segments.append(text_segment(prefix.rstrip()))
-            segments.append({"type": "image", "data": {"file": f"base64://{encoded}"}})
-            Path(path).unlink(missing_ok=True)
+            segments.append(thumbnail)
+            segments.append(text_segment("[Telegram动态贴纸缩略图]"))
+            return segments
+        sticker_file = await downloaded_segment(event.message, "file", "telegram-sticker")
+        if sticker_file:
+            if not event.raw_text:
+                segments.append(text_segment(prefix.rstrip()))
+            segments.append(text_segment("[Telegram贴纸文件]"))
+            segments.append(sticker_file)
+            return segments
+
+    if event.message.photo:
+        photo = await downloaded_segment(event.message, "image", "telegram-photo")
+        if photo:
+            if not event.raw_text:
+                segments.append(text_segment(prefix.rstrip()))
+            segments.append(photo)
             return segments
 
     if segments:
