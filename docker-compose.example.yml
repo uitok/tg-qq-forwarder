@@ -1,0 +1,18 @@
+services:
+  tg-qq-forwarder:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      # Replace `napcat` with the NapCat service name in your own compose file.
+      NAPCAT_API: http://napcat:3000
+      TG_SESSION: /app/data/telegram_userbot
+      TG_SESSION_DIR: /app/data/sessions
+      TG_CONFIG: /app/data/config.json
+      TG_DOWNLOAD_DIR: /app/data/downloads
+      PANEL_DB: /app/data/panel.db

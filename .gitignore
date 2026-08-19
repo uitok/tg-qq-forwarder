@@ -1,0 +1,16 @@
+.env
+*.session
+*.session-journal
+config.json
+downloads/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.pid
+__pycache__/
+*.pyc
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
